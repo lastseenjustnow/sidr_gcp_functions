@@ -10,7 +10,12 @@ from google.cloud.bigquery import WriteDisposition
 import config
 
 
-def run():
+yesterday = datetime.today() - timedelta(days=2)
+date_format = "%Y-%m-%d"
+to_date = yesterday.date().strftime(date_format)
+
+
+def run(report_date=to_date, report_date_format=date_format):
     """Pushes the AppStore report into BigQuery"""
 
     storage_client = storage.Client()
@@ -21,32 +26,27 @@ def run():
         config.config_vars['appstore_key_id'],
         key_path,
         config.config_vars['appstore_issuer_id'])
-
     freq = config.config_vars['report_download_freq']
-    yesterday = datetime.today() - timedelta(days=2)
-    date_format = "%Y-%m-%d"
-    to_date = yesterday.date().strftime(date_format)
 
     # downloading the report
-    logging.info(f'Downloading .csv daily sales report from AppStore Connect for date: {to_date}')
+    logging.info(f'Downloading .csv daily sales report from AppStore Connect for date: {report_date}')
     filters_dict = {
         'vendorNumber': config.config_vars['vendor_number'],
         'frequency': freq,
         'reportType': config.config_vars['report_type'],
         'reportSubType': config.config_vars['report_subtype'],
-        'reportDate': to_date}
-    save_to_path = f'/tmp/report_{freq}_{to_date}.csv'
+        'reportDate': report_date}
+    save_to_path = f'/tmp/report_{freq}_{report_date}.csv'
     api.download_sales_and_trends_reports(filters=filters_dict, save_to=save_to_path)
-    logging.info(f'Download completed')
+    logging.info(f'Download completed. Uploading the csv...')
 
     # delete and insert into BQ
-    logging.info(f'Uploading the csv...')
     client = bigquery.Client()
     table_id = f"{config.config_vars['project_id']}.{config.config_vars['output_dataset_id']}.{config.config_vars['output_table_name']}"
 
     con = bq.connect()
     cursor = con.cursor()
-    query = f"DELETE FROM {table_id} WHERE Begin_Date=PARSE_DATE('{date_format}', '{to_date}')"
+    query = f"DELETE FROM {table_id} WHERE Begin_Date=PARSE_DATE('{report_date_format}', '{report_date}')"
     cursor.execute(query)
     con.commit()
     con.close()
@@ -76,9 +76,14 @@ def main(data, context):
         current_time = datetime.utcnow()
         log_message = Template('Cloud Function was triggered on $time')
         logging.info(log_message.safe_substitute(time=current_time))
+        logging.info(f"Data received from PubSub: {data}")
 
         try:
-            run()
+            if data.get('attributes') is None or data.get('attributes').get('report_date') is None:
+                logging.warning('No report date was provided. Using default one (t-2)')
+                run()
+            else:
+                run(data.get('attributes').get('report_date'))
 
         except Exception as error:
             log_message = Template('Query failed due to '
@@ -91,4 +96,4 @@ def main(data, context):
 
 
 if __name__ == '__main__':
-    main('data', 'context')
+    main(dict(), 'context')

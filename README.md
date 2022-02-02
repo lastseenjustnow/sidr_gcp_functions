@@ -1,7 +1,7 @@
 **SIDR Google Cloud Functions**
 
-Make sure to create $GOOGLE_APPLICATION_CREDENTIALS var in your local env or to use Application Default Credentials.
-The topic used for triggering Cloud function is 'appstore-topic'.
+Make sure to have $GOOGLE_APPLICATION_CREDENTIALS variable defined in the runtime environment.
+config.py file contains all the constant parameters, such as GCP project id.
 
 References:
 | Reference | Link |
