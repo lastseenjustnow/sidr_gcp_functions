@@ -1,6 +1,9 @@
 import logging
+import os
 from string import Template
 from datetime import datetime, timedelta
+import glob
+import pandas as pd
 
 import google.cloud.bigquery.dbapi as bq
 from appstoreconnect import Api
@@ -15,7 +18,7 @@ date_format = "%Y-%m-%d"
 to_date = yesterday.date().strftime(date_format)
 
 
-def run(report_date=to_date, report_date_format=date_format):
+def run(report_from_date=to_date, report_to_date=to_date, report_date_format=date_format):
     """Pushes the AppStore report into BigQuery"""
 
     storage_client = storage.Client()
@@ -28,17 +31,27 @@ def run(report_date=to_date, report_date_format=date_format):
         config.config_vars['appstore_issuer_id'])
     freq = config.config_vars['report_download_freq']
 
-    # downloading the report
-    logging.info(f'Downloading .csv daily sales report from AppStore Connect for date: {report_date}')
-    filters_dict = {
-        'vendorNumber': config.config_vars['vendor_number'],
-        'frequency': freq,
-        'reportType': config.config_vars['report_type'],
-        'reportSubType': config.config_vars['report_subtype'],
-        'reportDate': report_date}
-    save_to_path = f'/tmp/report_{freq}_{report_date}.csv'
-    api.download_sales_and_trends_reports(filters=filters_dict, save_to=save_to_path)
-    logging.info(f'Download completed. Uploading the csv...')
+    # downloading reports
+    date_i = report_from_date
+    while date_i <= report_to_date:
+        logging.info(f'Downloading .csv daily sales report from AppStore Connect for date: {date_i}')
+        filters_dict = {
+            'vendorNumber': config.config_vars['vendor_number'],
+            'frequency': freq,
+            'reportType': config.config_vars['report_type'],
+            'reportSubType': config.config_vars['report_subtype'],
+            'reportDate': date_i}
+        report_csv = f'/tmp/report_{freq}_{date_i}.csv'
+        api.download_sales_and_trends_reports(filters=filters_dict, save_to=report_csv)
+        logging.info(f'Download completed. Uploading data...')
+        date_i = (datetime.strptime(date_i, date_format) + timedelta(days=1)).strftime(date_format)
+
+    # merge csvs into one
+    os.chdir("/tmp")
+    all_filenames = [i for i in glob.glob('*.{}'.format('csv'))]
+    combined_csv = pd.concat([pd.read_csv(f) for f in all_filenames])
+    save_to_path = '/tmp/reports.csv'
+    combined_csv.to_csv(save_to_path, index=False, encoding='utf-8-sig')
 
     # delete and insert into BQ
     client = bigquery.Client()
@@ -46,7 +59,10 @@ def run(report_date=to_date, report_date_format=date_format):
 
     con = bq.connect()
     cursor = con.cursor()
-    query = f"DELETE FROM {table_id} WHERE Begin_Date=PARSE_DATE('{report_date_format}', '{report_date}')"
+    query = f"""
+    DELETE FROM {table_id}
+    WHERE Begin_Date >= PARSE_DATE('{report_date_format}', '{report_from_date}')
+    AND Begin_Date <= PARSE_DATE('{report_date_format}', '{report_to_date}') """
     cursor.execute(query)
     con.commit()
     con.close()
@@ -79,11 +95,13 @@ def main(data, context):
         logging.info(f"Data received from PubSub: {data}")
 
         try:
-            if data.get('attributes') is None or data.get('attributes').get('report_date') is None:
-                logging.warning('No report date was provided. Using default one (t-2)')
+            if data.get('attributes') is None or data.get('attributes').get('report_from_date') is None:
+                logging.warning('No report start date was provided. Using default one (t-2)')
                 run()
             else:
-                run(data.get('attributes').get('report_date'))
+                report_from_date = data.get('attributes').get('report_from_date')
+                report_to_date = data.get('attributes').get('report_to_date')
+                run(report_from_date, report_to_date)
 
         except Exception as error:
             log_message = Template('Query failed due to '

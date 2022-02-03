@@ -20,14 +20,10 @@ def fetch_reports(date_from: str, date_to: str):
     :param date_to: End date
     :return:
     """
-    date_i = date_from
-    while date_i <= date_to:
-        data_str = f"Generate report for {date_i}"
-        data = data_str.encode("utf-8")
-        future = publisher.publish(
-            topic_path, data, report_date=date_i
-        )
-        print(future.result())
-        date_i = (datetime.strptime(date_i, date_format) + timedelta(days=1)).strftime(date_format)
-
+    data_str = f"Generate reports for dates: {date_from} - {date_to}"
+    data = data_str.encode("utf-8")
+    future = publisher.publish(
+        topic_path, data, report_from_date=date_from, report_to_date=date_to
+    )
+    print(future.result())
     return "Ok."
